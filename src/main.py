@@ -1,14 +1,18 @@
 import os
 import re
-import uuid
 import argparse
 import chromadb
-from pypdf import PdfReader
-from tqdm import tqdm
+import pdfplumber
 import nltk
+import logging
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from nltk.probability import FreqDist
+
+from DocPdfParser import DocPdfParser
+
+chroma_client = chromadb.PersistentClient(path="./chroma_db")
+logger = logging.getLogger(__name__)
 
 try:
     nltk.data.find('tokenizers/punkt')
@@ -17,134 +21,61 @@ except LookupError:
     nltk.download('punkt')
     nltk.download('stopwords')
 
-chroma_client = chromadb.PersistentClient(path="./chroma_db")
-
-def get_doc_title(reader):
-    """
-    Retrieves the title from the 2nd line of the first page.
-    """
-    page1_text = reader.pages[0].extract_text()
-    lines = page1_text.splitlines()
-    # Return the 2nd line (index 1), stripped of whitespace
-    return lines[1].strip() if len(lines) > 1 else "default_collection"
-
-def parse_table(text, page):
-    """
-    Parses the table of contents text to extract headers.
-    """
-    if text.strip().startswith("TABLE"):
-        print("========================================================")
-        print(text)
-        print("========================================================")
-
-        table_settings = {
-            "vertical_strategy": "lines", 
-            "horizontal_strategy": "lines",
-            "join_y_tolerance": 5,      # Helps merge text vertically split across lines
-            "join_x_tolerance": 2,
-            "explicit_vertical_lines": [],
-            "explicit_horizontal_lines": [],
-            "snap_y_tolerance": 3,
-        }
-        tables = page.extract_tables(table_settings=table_settings)
-        
-        print(tables)
-        print("========================================================")
-        return tables if tables else None
-    return None
-
-def get_last_processed_header(collection):
-    """
-    Retrieves the last processed header from the collection's metadata.
-    """
-    results = collection.get(include=['metadatas'])
-    if not results or not results['metadatas']:
-        return None
-    headers = [m.get('header') for m in results['metadatas'] if 'header' in m]
-    return headers[-1] if headers else None
-
-def check_intentionally_blank(text):
-    """
-    Checks if the page text indicates that it is intentionally left blank.
-    """
-    return "THIS PAGE INTENTIONALLY LEFT BLANK" in text.strip().upper()
-
-def check_table_of_contents(text):
-    """
-    Checks if the page text indicates that it is a Table of Contents.
-    """
-    return "TABLE OF CONTENTS" in text.strip().upper()
-
-def check_page_to_skip(text):
-    """
-    Checks if the page should be skipped.
-    """
-    if not text:
-        return True
-    if check_intentionally_blank(text):
-        return True
-    if check_table_of_contents(text):
-        return True
-    return False
-
-def process_and_store(reader, max_pages, collection, doc_title, source_file=None):
-    """
-    Processes the PDF, extracts text, splits into blocks, and stores them in the collection.
-    """
-    full_text = ""
-    num_pages = min(len(reader.pages), max_pages)
-    
-    # 1. Extract text and strip the doc_title from the start of every page
-    print("Extracting text and cleaning pages...")
-    for i in range(num_pages):
-        text = reader.pages[i].extract_text()
-        if check_page_to_skip(text):
-            # Skip pages with no relevant content
-            continue  
-
-        if i == 542 or i == 543 or i == 544:
-            print(f"Page {i+1} text: {text}")
-            print("========================================================")
-
-        # Find the pages that are tables and parse the table and store into a different collection
-        tbl = parse_table(text, reader.pages[i])
-        if tbl is not None:
-            continue  
-
-        # Remove the document title from the start of the text if it exists
-        text = text[len(doc_title):].lstrip()
-        full_text += text + "\n"
-
-
-
-
-    # words = [w.lower() for w in word_tokenize(content) if w.isalnum()]
-    # keywords = [word[0] for word in FreqDist([w for w in words if w not in set(stopwords.words('english'))]).most_common(10)]
-    
-    # collection.add(
-    #     documents=[content],
-    #     metadatas={"source": os.path.basename(source_file) if source_file else os.path.basename(args.path), "header": header, "keywords": ", ".join(keywords)},
-    #     ids=[str(uuid.uuid4())]
-    # )
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process PDF by block headers (e.g., 3.6.14).")
     parser.add_argument("path", help="Path to the PDF file")
+    parser.add_argument("-s", "--start_page", type=int, default=-1, help="Start page number (1-indexed)")
     parser.add_argument("-n", "--pages", type=int, default=100, help="Number of pages")
+    parser.add_argument("-l", "--log", action="store_true", help="Enable logging to a file")
+    parser.add_argument("-lf", "--log_file", type=str, default="example.log", help="Log file name (default: example.log)")
+    parser.add_argument("-lv", "--log_level", type=str, default="INFO", help="Log level (default: INFO)")
     args = parser.parse_args()
 
+    if args.log:
+        logging.basicConfig(filename=args.log_file, encoding='utf-8', level=getattr(logging, args.log_level), format='%(asctime)s - %(levelname)s - %(message)s')
+    else:
+        logging.basicConfig(level=getattr(logging, args.log_level), format='%(asctime)s - %(levelname)s - %(message)s')
     if os.path.exists(args.path):
-        reader = PdfReader(args.path)
+        parser = DocPdfParser(args.path)
 
         # Determine Title and Collection Name
-        title = get_doc_title(reader)
-        col_name = re.sub(r'[^a-zA-Z0-9_-]', '_', title)
-        collection = chroma_client.get_or_create_collection(name=col_name)
-        
-        print(f"Document Title: {title}")
-        print(f"Using Collection: {col_name}")
-        
-        process_and_store(reader, args.pages, collection, title, source_file=args.path)
-        print(f"Done. Total blocks: {collection.count()}")
+        title = parser.get_doc_title()
+        collection_name = re.sub(r'[^a-zA-Z0-9_-]', '_', title)
+
+        # Create or get collections for text and tables
+        text_collection = chroma_client.get_or_create_collection(name=collection_name)
+        table_collection = chroma_client.get_or_create_collection(name=f"{collection_name}_tables")
+
+        # Check to see what the max page that has already been processed and stored in the collection
+        existing_ids = []
+
+        if text_collection.count() > 0:
+            print(f"Existing IDs in text collection '{collection_name}': {text_collection.get()['ids']}")
+            existing_ids += text_collection.get()['ids']
+        if table_collection.count() > 0:
+            existing_ids += table_collection.get()['ids']
+
+        existing_page_numbers = [int(doc_id.split("_")[1]) for doc_id in existing_ids if doc_id.startswith("page_")]
+        if existing_page_numbers:
+            max_existing_page = max(existing_page_numbers)
+            logger.info(f"Max existing page in collection: {max_existing_page}")
+            if args.start_page != -1 and args.start_page <= max_existing_page:
+                logger.warning(f"Start page {args.start_page} is less than or equal to the max existing page {max_existing_page}.")
+                logger.info("This may result in duplicate entries in the collection. Exiting...")
+                exit(1)
+            elif args.start_page == -1:
+                args.start_page = max_existing_page + 1
+                logger.info(f"Setting start page to {args.start_page} to avoid duplicates.")
+
+        if args.start_page == -1:
+            args.start_page = 0  # Default to the first page if not specified
+
+        logger.info(f"Processing PDF ({title}): {args.path}")
+        parser.parse(
+            text_collection=text_collection,
+            table_collection=table_collection,
+            start_page=args.start_page,
+            pages_to_parse=args.pages
+        )
     else:
-        print("File not found.")
+        logger.error(f"File {args.path} does not exist.")
