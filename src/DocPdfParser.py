@@ -116,9 +116,9 @@ class DocPdfParser:
 
             # Store the text in the appropriate collection based on the page type
             if page_type == self.REGULAR_PAGE and text_collection is not None:
+                blocks += self.split_text_into_blocks(pre_processed_text)
                 logger.info(f"Page {page_number} is of type {page_type}.  Pre-processed text: {pre_processed_text[:20]}...")  # Print first 20 characters of the text
                 logger.info(f"\n\n{pre_processed_text}\n\n")
-                blocks += self.split_text_into_blocks(pre_processed_text)
                 logger.info(f"Blocks extracted from page {page_number}: {blocks}")
 
                 for block in blocks:
@@ -134,7 +134,7 @@ class DocPdfParser:
 
                 blocks = blocks[-1:]
                 # self.store_text_in_collection(pre_processed_text, text_collection, page_number, self.get_doc_title())
-                logger.info(f"Page {page_number} processed. ===================================<")  # Print first 20 characters of the text
+                logger.info(f"Page {page_number} processed. ===================================<")
             ## TO-DO: add a check to see if this is a table and parse/store it
             # elif page_type == self.TABLE and table_collection is not None:
             #     self.store_text_in_collection(pre_processed_text, table_collection, page_number, self.get_doc_title())
@@ -149,11 +149,12 @@ class DocPdfParser:
         Args:
             text (str): The text to split into blocks
         """
-        # blocks = re.split(self.BLOCK_PATTERN, text)
-        # blocks = re.findall(self.BLOCK_PATTERN, text, re.MULTILINE)
-        # return blocks
-        pattern = r'(?m)^(?=\d+(\.\d+)+)'
-        result = [s.strip() for s in re.split(self.BLOCK_PATTERN, text, re.MULTILINE) if s.strip()]
+        #     Pattern r'(?m)^(?=\d+(\.\d+)+)', results is a wierd split, where the last number of the 
+        # list is being duplicated, repeatedly.  Go ahead and remove any element that is less than 3 characters,
+        # or are empty
+        result = [s.strip() for s in re.split(self.BLOCK_PATTERN, text, re.MULTILINE) if s.strip() and len(s.strip()) >= 3]
+        # Remove the \n and replace with space
+        result = [s.replace("\n", " ") for s in result]
         return result
 
     def store_text_in_collection(self, text, collection, page_number, document_name=None):
