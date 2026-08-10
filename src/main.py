@@ -1,27 +1,81 @@
 import os
-import re
+import sys
 import argparse
-import chromadb
-import pdfplumber
-import nltk
 import logging
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-from nltk.probability import FreqDist
 
-from DocPdfParser import DocPdfParser
+import pdfplumber
 
-chroma_client = chromadb.PersistentClient(path="./chroma_db")
+from dotenv import load_dotenv
+from langchain_openai import AzureChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+
 logger = logging.getLogger(__name__)
 
-try:
-    nltk.data.find('tokenizers/punkt')
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('punkt')
-    nltk.download('stopwords')
+def load_environment():
+    """
+    Loads and validates environment variables.
+    """
+    load_dotenv()
+    
+    required_vars = ["OPENAI_ENDPOINT", "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_API_VERSION"]
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    
+    if missing_vars:
+        logger.error(f"Error: Missing required environment variables: {', '.join(missing_vars)}")
+        logger.error("Please check your .env file.")
+        sys.exit(1)
+
+def load_system_prompt(filename):
+    """Loads the agent behavior definition from a markdown file."""
+    try:
+        with open(filename, "r", encoding="utf-8") as file:
+            return file.read()
+    except FileNotFoundError:
+        print(f"Error: Could not find {filename}. Please create it in the same directory.")
+        sys.exit(1)
+
+
+def main(file_path, start_page=0, num_pages=100):
+    """
+    Main function to take the requested file.  Break the file into blocks, and pass them to the
+    LLM to write python code to process the data into a structured format for storing the data in
+    a vector database.  The LLM will return the code to process the data, and the code will be executed
+    Args:
+        file_path (str): Path to the PDF file to be processed.
+        start_page (int): The page number to start processing from.
+        num_pages (int): The number of pages to process.
+    """
+    pdf_script_tool_prompt = load_system_prompt("agents/pdf_script_gen/AGENTS.md")
+    llm = AzureChatOpenAI(
+        azure_endpoint=os.getenv("OPENAI_ENDPOINT"),
+        api_key=os.getenv("OPENAI_API_KEY"),
+        azure_deployment=os.getenv("OPENAI_MODEL"),
+        api_version=os.getenv("OPENAI_API_VERSION"),
+        temperature=0.7
+    )
+
+    chat_history = [
+        SystemMessage(content=pdf_script_tool_prompt)
+    ]
+
+    logger.info("="*50)
+    logger.info("🤖 PDF Script Generation Agent Initialized")
+    logger.info("="*50)
+
+    reader = pdfplumber.open(file_path)
+    for page_number in range(start_page, min(start_page + num_pages, len(reader.pages))):
+        page = reader.pages[page_number]
+        text = page.extract_text()
+        logger.info("="*50)
+        logger.info(f"\n\nPage {page_number}:\n{text}\n\n")
+        chat_history.append(HumanMessage(content=text))
+        response = llm.invoke(chat_history)
+        chat_history.append(AIMessage(content=response.content))
+        logger.info(f"Response from LLM for page {page_number}:\n{response.content}\n\n")
+
 
 if __name__ == "__main__":
+    # Set up argument parser for command-line arguments
     parser = argparse.ArgumentParser(description="Process PDF by block headers (e.g., 3.6.14).")
     parser.add_argument("path", help="Path to the PDF file")
     parser.add_argument("-s", "--start_page", type=int, default=-1, help="Start page number (1-indexed)")
@@ -31,51 +85,16 @@ if __name__ == "__main__":
     parser.add_argument("-lv", "--log_level", type=str, default="INFO", help="Log level (default: INFO)")
     args = parser.parse_args()
 
+    # Set up logging based on command-line arguments
     if args.log:
         logging.basicConfig(filename=args.log_file, encoding='utf-8', level=getattr(logging, args.log_level), format='%(asctime)s - %(levelname)s - %(message)s')
     else:
         logging.basicConfig(level=getattr(logging, args.log_level), format='%(asctime)s - %(levelname)s - %(message)s')
+
     if os.path.exists(args.path):
-        parser = DocPdfParser(args.path)
-
-        # Determine Title and Collection Name
-        title = parser.get_doc_title()
-        collection_name = re.sub(r'[^a-zA-Z0-9_-]', '_', title)
-
-        # Create or get collections for text and tables
-        text_collection = chroma_client.get_or_create_collection(name=collection_name)
-        table_collection = chroma_client.get_or_create_collection(name=f"{collection_name}_tables")
-
-        # Check to see what the max page that has already been processed and stored in the collection
-        existing_ids = []
-
-        if text_collection.count() > 0:
-            print(f"Existing IDs in text collection '{collection_name}': {text_collection.get()['ids']}")
-            existing_ids += text_collection.get()['ids']
-        if table_collection.count() > 0:
-            existing_ids += table_collection.get()['ids']
-
-        existing_page_numbers = [int(doc_id.split("_")[1]) for doc_id in existing_ids if doc_id.startswith("page_")]
-        if existing_page_numbers:
-            max_existing_page = max(existing_page_numbers)
-            logger.info(f"Max existing page in collection: {max_existing_page}")
-            if args.start_page != -1 and args.start_page <= max_existing_page:
-                logger.warning(f"Start page {args.start_page} is less than or equal to the max existing page {max_existing_page}.")
-                logger.info("This may result in duplicate entries in the collection. Exiting...")
-                exit(1)
-            elif args.start_page == -1:
-                args.start_page = max_existing_page + 1
-                logger.info(f"Setting start page to {args.start_page} to avoid duplicates.")
-
-        if args.start_page == -1:
-            args.start_page = 0  # Default to the first page if not specified
-
-        logger.info(f"Processing PDF ({title}): {args.path}")
-        parser.parse(
-            text_collection=text_collection,
-            table_collection=table_collection,
-            start_page=args.start_page,
-            pages_to_parse=args.pages
-        )
+        # Load environment variables and validate them
+        load_environment()
+        # Call the main function with the provided arguments
+        main(args.path, start_page=args.start_page, num_pages=args.pages)
     else:
         logger.error(f"File {args.path} does not exist.")
