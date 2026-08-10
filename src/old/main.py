@@ -80,3 +80,92 @@ if __name__ == "__main__":
         )
     else:
         logger.error(f"File {args.path} does not exist.")
+
+
+# import os
+# import sys
+
+# import logging
+# from dotenv import load_dotenv
+
+# from typing import TypedDict
+# # from langchain_openai import ChatOpenAI
+# from langchain_openai import AzureChatOpenAI
+# from langchain_core.prompts import ChatPromptTemplate
+# # from langchain_core.pydantic_v1 import BaseModel, Field
+# from pydantic import BaseModel, Field
+# from langchain_chroma import Chroma
+# from langchain_openai import OpenAIEmbeddings
+# from langgraph.graph import StateGraph, END
+
+# logger = logging.getLogger(__name__)
+
+# # 1. Define the desired JSON structure
+# class DocumentSchema(BaseModel):
+#     title: str = Field(description="The title of the document")
+#     summary: str = Field(description="A brief summary of the text")
+#     entities: list[str] = Field(description="Key entities mentioned in the text")
+#     category: str = Field(description="The topic category")
+
+# # 2. Define the Graph State
+# class GraphState(TypedDict):
+#     raw_text: str
+#     structured_data: dict
+#     db_path: str
+
+# # 3. Initialize LLM with structured output
+# load_dotenv()
+
+# required_vars = ["OPENAI_ENDPOINT", "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_API_VERSION"]
+# missing_vars = [var for var in required_vars if not os.getenv(var)]
+# if missing_vars:
+#     logger.error(f"Error: Missing required environment variables: {', '.join(missing_vars)}")
+#     logger.error("Please check your .env file.")
+#     sys.exit(1)
+
+# # llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+# llm = AzureChatOpenAI(
+#     azure_endpoint=os.getenv("OPENAI_ENDPOINT"),
+#     api_key=os.getenv("OPENAI_API_KEY"),
+#     azure_deployment=os.getenv("OPENAI_MODEL"),
+#     api_version=os.getenv("OPENAI_API_VERSION"),
+#     temperature=0.7
+# )
+# structured_llm = llm.with_structured_output(DocumentSchema)
+
+# # Node 1: Extract JSON from Text
+# def extractor_node(state: GraphState):
+#     prompt = ChatPromptTemplate.from_template("Extract information from this text: {text}")
+#     chain = prompt | structured_llm
+#     result = chain.invoke({"text": state["raw_text"]})
+#     return {"structured_data": result.dict()}
+
+# # Node 2: Store in ChromaDB
+# def storage_node(state: GraphState):
+#     db = Chroma(
+#         persist_directory=state["db_path"],
+#         embedding_function=OpenAIEmbeddings()
+#     )
+#     # Convert dict to string for storage
+#     content = str(state["structured_data"])
+#     db.add_texts(texts=[content], metadatas=[state["structured_data"]])
+#     return {"structured_data": state["structured_data"]}
+
+# # 4. Build the Graph
+# workflow = StateGraph(GraphState)
+
+# workflow.add_node("extract", extractor_node)
+# workflow.add_node("store", storage_node)
+
+# workflow.set_entry_point("extract")
+# workflow.add_edge("extract", "store")
+# workflow.add_edge("store", END)
+
+# app = workflow.compile()
+
+# # 5. Usage
+# input_text = "LangGraph is a library for building stateful, multi-actor applications with LLMs."
+# config = {"raw_text": input_text, "db_path": "./chroma_db"}
+
+# result = app.invoke(config)
+# print("Stored JSON:", result["structured_data"])

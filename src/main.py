@@ -1,39 +1,15 @@
 import os
-import sys
-import argparse
+import re
 import logging
 
 import pdfplumber
 
-from dotenv import load_dotenv
 from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
+from utils import load_system_prompts, load_environment, load_arguments
+
 logger = logging.getLogger(__name__)
-
-def load_environment():
-    """
-    Loads and validates environment variables.
-    """
-    load_dotenv()
-    
-    required_vars = ["OPENAI_ENDPOINT", "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_API_VERSION"]
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-    
-    if missing_vars:
-        logger.error(f"Error: Missing required environment variables: {', '.join(missing_vars)}")
-        logger.error("Please check your .env file.")
-        sys.exit(1)
-
-def load_system_prompt(filename):
-    """Loads the agent behavior definition from a markdown file."""
-    try:
-        with open(filename, "r", encoding="utf-8") as file:
-            return file.read()
-    except FileNotFoundError:
-        print(f"Error: Could not find {filename}. Please create it in the same directory.")
-        sys.exit(1)
-
 
 def main(file_path, start_page=0, num_pages=100):
     """
@@ -45,7 +21,10 @@ def main(file_path, start_page=0, num_pages=100):
         start_page (int): The page number to start processing from.
         num_pages (int): The number of pages to process.
     """
-    pdf_script_tool_prompt = load_system_prompt("agents/pdf_script_gen/AGENTS.md")
+    prompts = load_system_prompts("agents")
+    logger.info(f"Loaded system prompts: {list(prompts.keys())}")
+    logger.info("="*50)
+
     llm = AzureChatOpenAI(
         azure_endpoint=os.getenv("OPENAI_ENDPOINT"),
         api_key=os.getenv("OPENAI_API_KEY"),
@@ -54,36 +33,62 @@ def main(file_path, start_page=0, num_pages=100):
         temperature=0.7
     )
 
-    chat_history = [
-        SystemMessage(content=pdf_script_tool_prompt)
-    ]
+    # chat_history = [
+    #     SystemMessage(content=prompts['pdf_script_gen'])
+    # ]
 
-    logger.info("="*50)
     logger.info("🤖 PDF Script Generation Agent Initialized")
     logger.info("="*50)
 
+    text = ""
     reader = pdfplumber.open(file_path)
     for page_number in range(start_page, min(start_page + num_pages, len(reader.pages))):
         page = reader.pages[page_number]
-        text = page.extract_text()
-        logger.info("="*50)
-        logger.info(f"\n\nPage {page_number}:\n{text}\n\n")
-        chat_history.append(HumanMessage(content=text))
-        response = llm.invoke(chat_history)
-        chat_history.append(AIMessage(content=response.content))
-        logger.info(f"Response from LLM for page {page_number}:\n{response.content}\n\n")
+        # text = page.extract_text()
+        text += page.extract_text()
+
+        # logger.info("="*50)
+        # logger.info(f"\n\nPage {page_number}:\n{text}\n\n")
+        # chat_history.append(HumanMessage(content=text))
+        # response = llm.invoke(chat_history)
+        # chat_history.append(AIMessage(content=response.content))
+        # logger.info(f"Response from LLM for page {page_number}:\n{response.content}\n\n")
+    
+    parts = re.split(r'(\n\d+\.\s[A-Z\s]+(?:\n|$))', text)
+    logger.info(f"Total parts extracted: {len(parts)}")
+    logger.info("="*50)
+
+    fixed_parts = []
+    tmp_part = ""
+    for part in parts:
+        if re.match(r'\n\d+\.\s[A-Z\s]+(?:\n|$)', part):
+            if tmp_part:
+                fixed_parts.append(tmp_part)
+            tmp_part = part
+        else:
+            tmp_part += part
+    if tmp_part:
+        fixed_parts.append(tmp_part)
+
+    # for fixed_part in fixed_parts:
+    #     logger.info("="*50)
+    #     logger.info(f"{fixed_part}\n\n")
+
+    # Attempting to use the LLM to process and extract the table of contents
+    logger.info("="*50)
+    logger.info("Attempting to extract table of contents using LLM...")
+    chat_history = [
+        SystemMessage(content=prompts['pdf_table_of_contents']),
+        HumanMessage(content=fixed_parts[0])
+    ]
+    response = llm.invoke(chat_history)
+    logger.info(f"Response from LLM for table of contents:\n{response.content}\n\n")
+
 
 
 if __name__ == "__main__":
     # Set up argument parser for command-line arguments
-    parser = argparse.ArgumentParser(description="Process PDF by block headers (e.g., 3.6.14).")
-    parser.add_argument("path", help="Path to the PDF file")
-    parser.add_argument("-s", "--start_page", type=int, default=-1, help="Start page number (1-indexed)")
-    parser.add_argument("-n", "--pages", type=int, default=100, help="Number of pages")
-    parser.add_argument("-l", "--log", action="store_true", help="Enable logging to a file")
-    parser.add_argument("-lf", "--log_file", type=str, default="example.log", help="Log file name (default: example.log)")
-    parser.add_argument("-lv", "--log_level", type=str, default="INFO", help="Log level (default: INFO)")
-    args = parser.parse_args()
+    args = load_arguments()
 
     # Set up logging based on command-line arguments
     if args.log:
@@ -92,9 +97,7 @@ if __name__ == "__main__":
         logging.basicConfig(level=getattr(logging, args.log_level), format='%(asctime)s - %(levelname)s - %(message)s')
 
     if os.path.exists(args.path):
-        # Load environment variables and validate them
         load_environment()
-        # Call the main function with the provided arguments
         main(args.path, start_page=args.start_page, num_pages=args.pages)
     else:
         logger.error(f"File {args.path} does not exist.")
