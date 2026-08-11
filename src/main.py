@@ -60,15 +60,27 @@ def main(file_path, start_page=0, num_pages=100):
 
     fixed_parts = []
     tmp_part = ""
+    tmp_dir = os.path.join(os.getcwd(), "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+
     for part in parts:
         if re.match(r'\n\d+\.\s[A-Z\s]+(?:\n|$)', part):
             if tmp_part:
                 fixed_parts.append(tmp_part)
+                fixed_part_file = os.path.join(tmp_dir, f"fixed_part_{len(fixed_parts) - 1}.txt")
+                with open(fixed_part_file, "w", encoding="utf-8") as out_file:
+                    out_file.write(tmp_part)
+                logger.info(f"Wrote fixed_part to {fixed_part_file}")
+
             tmp_part = part
         else:
             tmp_part += part
     if tmp_part:
         fixed_parts.append(tmp_part)
+        fixed_part_file = os.path.join(tmp_dir, f"fixed_part_{len(fixed_parts) - 1}.txt")
+        with open(fixed_part_file, "w", encoding="utf-8") as out_file:
+            out_file.write(tmp_part)
+        logger.info(f"Wrote fixed_part to {fixed_part_file}")
 
     # for fixed_part in fixed_parts:
     #     logger.info("="*50)
