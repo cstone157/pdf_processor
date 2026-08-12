@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+
 def load_system_prompts(agents_folder: str) -> dict:
     """
     Loads the agent behavior definition from a markdown file.
@@ -21,11 +22,11 @@ def load_system_prompts(agents_folder: str) -> dict:
                 with open(agent_file, "r", encoding="utf-8") as file:
                     dir_name = directory.name
                     to_return[dir_name] = file.read()
-                    # to_return[str(directory)] = file.read()
     except Exception as e:
         logger.error(f"Error loading system prompts: {e}")
         sys.exit(1)
     return to_return
+
 
 def load_environment():
     """
@@ -41,6 +42,7 @@ def load_environment():
         logger.error(f"Error: Missing required environment variables: {', '.join(missing_vars)}")
         logger.error("Please check your .env file.")
         sys.exit(1)
+
 
 def load_arguments():
     """
