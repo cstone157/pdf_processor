@@ -1,7 +1,10 @@
 import logging
+from pathlib import Path
 from pdfplumber import PDF
 
 from typing import Literal
+
+from langchain_core.messages import SystemMessage, HumanMessage
 
 from graph.pdf_parse_state import PdfParseState
 
@@ -9,38 +12,42 @@ logger = logging.getLogger(__name__)
 _llm_ = None                                         # Reference to a global LLM object, initialized later in the workflow
 _reader_ = None                                      # Reference to a global PDF reader object, initialized later in the workflow
 
+_agents_statements_ = None
 
-def _initialze_(llm, reader):
+
+def _initialze_(llm, reader, statement_folder_path="./agents"):
     """
     Initializes the global LLM object.
     Args:
         llm: The LLM object to be used in the workflow.
     """
-    global _llm_
-    global _reader_
+    global _llm_, _reader_, _agents_statements_
 
     _llm_ = llm
     _reader_ = reader
+    _agents_statements_ = {}
+
+    # read in all of the agent_statements, and name them after the different folders
+    statement_folder_path = Path(statement_folder_path)
+    for file_path in statement_folder_path.rglob("*"):
+        if file_path.is_file():
+            logger.info(f"Reading {file_path}")
+            key = file_path.parent.name
+
+            try:
+                with open(file_path, "r", encoding="utf-8") as file:
+                    content = file.read()
+                    _agents_statements_[key] = content
+                    logger.info(f"Inserted  {file_path}")
+            except Exception as e:
+                logger.error(f"Error while trying to ready in {file_path}")
+                logger.error(f"Stack trace is: \n {e}")
 
 
-def initial_node(state: PdfParseState) -> PdfParseState:
-    """
-    The initial node in the graph state.  Checks to see if the enviroment
-    has been correctly initialized.
-    Args:
-        state (PdfParseState): The current graph state.
-    Returns:
-        PdfParseState: The updated graph state.
-    """
-    logger.info("Starting initial node processing...")
-
-    if _llm_ is None or _reader_ is None:
-        raise Exception("pdf_parser improperly initialized.  Exiting.")
-
-    return state
-
-
-def initial_routing_logic(state: PdfParseState) -> Literal["chunking_agent", "error_agent"]:
+# ---------------------------------------------------------------------------------------
+# Routing logic
+# ---------------------------------------------------------------------------------------
+def routing_logic(state: PdfParseState) -> Literal["read_table_of_contents", "read_table", "read_section", "summary_section"]:
     """
     Determines the next agent to invoke based on the current state.
     Args:
@@ -50,33 +57,133 @@ def initial_routing_logic(state: PdfParseState) -> Literal["chunking_agent", "er
     """
     logger.info("Routing to the appropriate agent...")
     
-    # Placeholder logic for routing
-    if "chunked_text" not in state.keys() or len(state.chunked_text) == 0:
-        return "chunking_agent"
-    else:
-        return "error_agent"
+    # Check and see if the pages_read is past the end of the document, if so exit
+    if state["pages_read"] >= len(state["pages"]):
+        return "summary_section"
+
+    # Check and see if tables of contents haven't been parsed, or if the maximum number of
+    # pages read exceed the area covered under the current table_of_contents covered.
+    # Also, check if the tables of contents is empty, if so then let's start there
+    if state["pages_read"] < state["tables_of_contents_max_page"] or not state["table_of_contents"]:
+        return "read_table_of_contents"
+
+    return "read_section"
 
 
-def chunking_agent(state: PdfParseState) -> PdfParseState:
+# ---------------------------------------------------------------------------------------
+# The individual nodes that compose our graph
+# ---------------------------------------------------------------------------------------
+def read_initial_document(state: PdfParseState) -> PdfParseState:
     """
-    Processes the PDF in chunks and updates the graph state.
+    The node that reads in a single document, it should use the document next should be 
+    read in.
+
     Args:
         state (PdfParseState): The current graph state.
     Returns:
         PdfParseState: The updated graph state.
     """
-    logger.info("Processing PDF in chunks...")
+    logger.info("Setting up to read the document ...")
 
+    if "pages" not in state:
+        state["pages"] = _reader_.pages
+    if "pages_read" not in state:
+        state["pages_read"] = 0
+    if "table_of_contents" not in state:
+        state["table_of_contents"] = {}
+    if "tables_of_contents_max_page" not in state:
+        state["tables_of_contents_max_page"] = 0
+    if "sections" not in state:
+        state["sections"] = {}
+    if "tables" not in state:
+        state["tables"] = {}
+    if "appendix" not in state:
+        state["appendix"] = {}
     return state
 
-
-def error_agent(state: PdfParseState) -> PdfParseState:
+def read_document(state: PdfParseState) -> PdfParseState:
     """
-    Handles errors in the graph state.
     Args:
         state (PdfParseState): The current graph state.
     Returns:
         PdfParseState: The updated graph state.
     """
-    logger.error("An error occurred while processing the PDF.")
     return state
+
+
+def read_table_of_contents(state: PdfParseState) -> PdfParseState:
+    """
+    Args:
+        state (PdfParseState): The current graph state.
+    Returns:
+        PdfParseState: The updated graph state.
+    """
+    logger.info("Starting reading the tables of contents ...")
+
+    # Start at the most recent page, loop through pages until we run out of table of contents
+    pages_read = 0
+    current_page = state["pages_read"]
+    statement = _agents_statements_["pdf_table_of_contents"]
+
+    # If we encounter a tables of contents, flip our status to True.
+    toc_encounted = False
+
+    messages = [
+        SystemMessage(content=statement),
+        HumanMessage(content="")
+    ]
+
+    while True:
+        if pages_read >= 50:
+            break
+        if current_page > len(state["pages"]):
+            logger.info("Exiting table of contents parser.  Reached the end of the document.")
+            break
+
+        page = state["pages"][current_page]
+        logger.info(f"Page {current_page} content '{page.extract_text()[:30]}...'")
+        messages[1] = HumanMessage(content=page.extract_text())
+        response = _llm_.invoke(messages)
+        print(response.content)
+
+        pages_read += 1
+        current_page += 1
+
+    state["pages_read"] += pages_read
+    # HACK: Forces an exit from the function
+    state["tables_of_contents_max_page"] = len(state["pages"])
+    return state
+
+
+def read_table(state: PdfParseState) -> PdfParseState:
+    """
+    Args:
+        state (PdfParseState): The current graph state.
+    Returns:
+        PdfParseState: The updated graph state.
+    """
+    state["pages_read"] += 1
+    return state
+
+
+def read_section(state: PdfParseState) -> PdfParseState:
+    """
+    Args:
+        state (PdfParseState): The current graph state.
+    Returns:
+        PdfParseState: The updated graph state.
+    """
+    state["pages_read"] += 1
+    return state
+
+
+def summary_section(state: PdfParseState) -> PdfParseState:
+    """
+    Args:
+        state (PdfParseState): The current graph state.
+    Returns:
+        PdfParseState: The updated graph state.
+    """
+    state["pages_read"] += 1
+    return state
+
