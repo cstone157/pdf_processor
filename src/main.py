@@ -39,10 +39,14 @@ if __name__ == "__main__":
         )
         graph.pdf_parse_node._initialze_(llm, reader)
 
+
         # Build graph
+        body_nodes = [
+            'read_initial_document', 'read_table_of_contents', 'read_table', 'read_section'
+        ]
         workflow = StateGraph(PdfParseState)           
         workflow.add_node('read_initial_document', graph.pdf_parse_node.read_initial_document)
-        workflow.add_node('read_document', graph.pdf_parse_node.read_document)
+        # workflow.add_node('read_document', graph.pdf_parse_node.read_document)
         workflow.add_node('read_table_of_contents', graph.pdf_parse_node.read_table_of_contents)
         workflow.add_node('read_table', graph.pdf_parse_node.read_table)
         workflow.add_node('read_section', graph.pdf_parse_node.read_section)
@@ -50,20 +54,22 @@ if __name__ == "__main__":
 
         # Define the flow
         workflow.add_edge(START, 'read_initial_document')
-        workflow.add_edge('read_initial_document', 'read_document')
-        workflow.add_conditional_edges('read_document', 
-            graph.pdf_parse_node.routing_logic,
-            {
-                "read_document": "read_document",
-                "read_table_of_contents": "read_table_of_contents",
-                "read_table": "read_table",
-                "read_section": "read_section",
-                "summary_section": "summary_section"
-            }
-        )
-        workflow.add_edge('read_table_of_contents', 'read_document')
-        workflow.add_edge('read_table', 'read_document')
-        workflow.add_edge('read_section', 'read_document')
+        # workflow.add_edge('read_initial_document', 'read_document')
+        for n in body_nodes:
+            workflow.add_conditional_edges(n, 
+                graph.pdf_parse_node.routing_logic,
+                {
+                    # "read_document": "read_document",
+                    "read_table_of_contents": "read_table_of_contents",
+                    "read_table": "read_table",
+                    "read_section": "read_section",
+                    "summary_section": "summary_section"
+                }
+            )
+        
+        # workflow.add_edge('read_table_of_contents', 'read_document')
+        # workflow.add_edge('read_table', 'read_document')
+        # workflow.add_edge('read_section', 'read_document')
         workflow.add_edge('summary_section', END)
 
         # Compile and run the workflow

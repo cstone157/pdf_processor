@@ -144,10 +144,20 @@ def read_table_of_contents(state: PdfParseState) -> PdfParseState:
         logger.info(f"Page {current_page} content '{page.extract_text()[:30]}...'")
         messages[1] = HumanMessage(content=page.extract_text())
         response = _llm_.invoke(messages)
+
+        if response is not None:
+            pages_read += 1
+            current_page += 1
+        elif response is None and not toc_encounted:
+            toc_encounted = True
+            pages_read += 1
+            current_page += 1
+        elif response is None and toc_encounted:
+            break
+
+
         print(response.content)
 
-        pages_read += 1
-        current_page += 1
 
     state["pages_read"] += pages_read
     # HACK: Forces an exit from the function
