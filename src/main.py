@@ -80,6 +80,9 @@ if __name__ == "__main__":
 
         # Run the graph and log the final output
         output = app.invoke({})
-        logger.info(f"Final output: {output}")
+        print(f"=> Final output: ")
+        for k in output.keys():
+            if k != "pages": 
+                print(f"-----> {k} : {output[k]}")
     else:
         logger.error(f"File {args.path} does not exist.")
