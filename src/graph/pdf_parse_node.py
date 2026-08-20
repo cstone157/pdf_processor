@@ -178,6 +178,10 @@ def read_table_of_contents(state: PdfParseState) -> PdfParseState:
 
             # Loop through the TOC and update the appropriate portions of the table_of_contents
             for item in toc_update["meta_data"]["items"]:
+                # IF the TOC was encountered then calculate the number of pages to be gone through
+                if state["tables_of_contents_max_page"] < item["page_ref"]:
+                    state["tables_of_contents_max_page"] = item["page_ref"]
+
                 if item["section"].lower().strip().startswith("table"):
                     state["table_of_contents"]["tables"].append(item)
                 elif item["section"].lower().strip().startswith("figures"):
