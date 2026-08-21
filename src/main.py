@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import logging
 
 import pdfplumber
@@ -42,47 +43,43 @@ if __name__ == "__main__":
 
         # Build graph
         body_nodes = [
-            'read_initial_document', 'read_table_of_contents', 'read_table', 'read_section'
+            'read_initial_document', 'read_table_of_contents', 'read_table', 'read_section'#, 'read_figure'
         ]
         workflow = StateGraph(PdfParseState)           
         workflow.add_node('read_initial_document', graph.pdf_parse_node.read_initial_document)
-        # workflow.add_node('read_document', graph.pdf_parse_node.read_document)
         workflow.add_node('read_table_of_contents', graph.pdf_parse_node.read_table_of_contents)
         workflow.add_node('read_table', graph.pdf_parse_node.read_table)
         workflow.add_node('read_section', graph.pdf_parse_node.read_section)
+        # workflow.add_node('read_figure', graph.pdf_parse_node.read_figure)
         workflow.add_node('summary_section', graph.pdf_parse_node.summary_section)
 
         # Define the flow
         workflow.add_edge(START, 'read_initial_document')
-        # workflow.add_edge('read_initial_document', 'read_document')
         for n in body_nodes:
             workflow.add_conditional_edges(n, 
                 graph.pdf_parse_node.routing_logic,
                 {
-                    # "read_document": "read_document",
                     "read_table_of_contents": "read_table_of_contents",
                     "read_table": "read_table",
                     "read_section": "read_section",
+                    # "read_figure": "read_figure",
                     "summary_section": "summary_section"
                 }
             )
         
-        # workflow.add_edge('read_table_of_contents', 'read_document')
-        # workflow.add_edge('read_table', 'read_document')
-        # workflow.add_edge('read_section', 'read_document')
         workflow.add_edge('summary_section', END)
 
         # Compile and run the workflow
         app = workflow.compile()
 
         # Print the ascii representation of the graph
-        # print(app.get_graph().draw_ascii())  # Graph currently throwing an error
+        # print(app.get_graph().draw_ascii())  # Graph currently throwing an error (doesn't seem to like loops)
 
         # Run the graph and log the final output
         output = app.invoke({})
         print(f"=> Final output: ")
         for k in output.keys():
             if k != "pages": 
-                print(f"-----> {k} : {output[k]}")
+                print(f"-----> {k} : {json.dumps(output[k], indent=2)}")
     else:
         logger.error(f"File {args.path} does not exist.")

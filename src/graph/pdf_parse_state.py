@@ -12,12 +12,13 @@ class PdfParseState(TypedDict):
     tables_of_contents: the dictionary of the table of contents
   """
   pages: list
-  pages_read: int
   table_of_contents: dict
-  tables_of_contents_max_page: int
   sections: dict
+  max_sections: int
+  scanned_sections: int
   tables: dict
-  appendix: dict
+  max_tables: int
+  scanned_tables: int
   
 
   

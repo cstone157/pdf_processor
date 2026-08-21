@@ -58,17 +58,18 @@ def routing_logic(state: PdfParseState) -> Literal["read_table_of_contents", "re
     """
     logger.info(f" ============================= Routing Logic =============================")
     
-    # Check and see if the pages_read is past the end of the document, if so exit
-    if state["pages_read"] >= len(state["pages"]):
-        return "summary_section"
-
     # Check and see if tables of contents haven't been parsed, or if the maximum number of
     # pages read exceed the area covered under the current table_of_contents covered.
     # Also, check if the tables of contents is empty, if so then let's start there
-    if state["pages_read"] < state["tables_of_contents_max_page"] or state["tables_of_contents_max_page"] == -1:
+    if not state["table_of_contents"]["scanned"]:
         return "read_table_of_contents"
 
-    return "read_section"
+    if state["scanned_sections"] < state["max_sections"]:
+        return "read_section"
+    if state["scanned_tables"] < state["max_tables"]:
+        return "read_table"
+
+    return "summary_section"
 
 
 # ---------------------------------------------------------------------------------------
@@ -88,36 +89,25 @@ def read_initial_document(state: PdfParseState) -> PdfParseState:
 
     if "pages" not in state:
         state["pages"] = _reader_.pages
-    if "pages_read" not in state:
-        state["pages_read"] = 0
     if "table_of_contents" not in state:
         state["table_of_contents"] = {
+            "scanned": False,
+            "table_of_contents_offset": 0,
             "sections": [],
             "tables": [],
             "figures": []
         }
-    # Use the value of -1, to denote that our application hasn't started scanning for a table of contents yet
-    # TO-DO: Check if we were passed a "table_of_contents", if so then set the state["tables_of_contents_max_page"]
-    #        to the maximum value that has already been scanned by the document
-    if "tables_of_contents_max_page" not in state:
-        state["tables_of_contents_max_page"] = -1       
+
     if "sections" not in state:
         state["sections"] = {}
+        state["max_sections"] = 0
+        state["scanned_sections"] = 0
     if "tables" not in state:
         state["tables"] = {}
-    if "appendix" not in state:
-        state["appendix"] = {}
+        state["max_tables"] = 0
+        state["scanned_tables"] = 0
     return state
 
-def read_document(state: PdfParseState) -> PdfParseState:
-    """
-    Args:
-        state (PdfParseState): The current graph state.
-    Returns:
-        PdfParseState: The updated graph state.
-    """
-    logger.info(f" ============================= Read Document =============================")
-    return state
 
 
 def read_table_of_contents(state: PdfParseState) -> PdfParseState:
@@ -127,77 +117,83 @@ def read_table_of_contents(state: PdfParseState) -> PdfParseState:
     Returns:
         PdfParseState: The updated graph state.
     """
-    logger.info(f" ============================= Read Table of Contents (page {state['pages_read']}) =============================")
+    logger.info(f" ============================= Read Table of Contents =============================")
 
     # Start at the most recent page, loop through pages until we run out of table of contents
-    current_page = state["pages_read"]
+    current_page = 0
     statement = _agents_statements_["pdf_table_of_contents"]
 
     # If we encounter a tables of contents, flip our status to True.
-    toc_encounted = False
+    toc_first = False
+    toc_encountered = False
+
+    # What is the maximum page covered under the table of contents
+    tables_of_contents_max_page = 0
 
     messages = [
         SystemMessage(content=statement),
         HumanMessage(content="")
     ]
 
+    logger.info(f"Agent beginning looking for all of the table_of_contents pages in our document.")
+    logger.info(f"Maximum number of pages {len(state['pages'])}.")
+
     while True:
-        if current_page - state["pages_read"] >= 50:
-            break
-        if current_page > len(state["pages"]):
+        if current_page >= len(state["pages"]):
             logger.info("Exiting table of contents parser.  Reached the end of the document.")
             break
 
+        logger.info(f"Submitting page {current_page} to be scanned.")
         page = state["pages"][current_page]
         messages[1] = HumanMessage(content=page.extract_text())
         response = _llm_.invoke(messages)
         toc_update = response.content
-        if toc_update.strip().lower() == 'none':
-            toc_update = None
+        if toc_update.strip().lower() == 'none' or toc_update is None:
+            # If the LLM hasn't detected a table of contensts, but we used to dealing with 
+            # a table of contents, we'll go ahead and jump to the end of the section that we
+            # we discovered in our table of contents, and begin rescanning.
+            if toc_encountered:
+                if not toc_first:
+                    toc_first = True
+                    state["table_of_contents"]["table_of_contents_offset"] = current_page
+                    logger.info(f" ============================= Estimated offset of page numbers: {current_page} =============================")
 
-        logger.info(f"Page {current_page} content '{page.extract_text()[:30]}...'")
-        if toc_update:
-            logger.info(f"  ==> Generated {toc_update[8:-3]}...")
+                toc_encountered = False
+                current_page = tables_of_contents_max_page
         else:
-            logger.info(f"  ==> NOTHING RETURNED, LLM DIDN'T DETECT TOC")
-
-        # Check if our toc_update is None, then go ahead and finish up.
-        if toc_update is None and toc_encounted:
-            break
-        # Otherwise, then go ahead and update our table_of_contents and store
-        elif toc_update is not None:
-            toc_encounted = True
+            logger.info(f"Page {current_page} content '{page.extract_text()[:20]}...'")
+            toc_encountered = True
             if toc_update.startswith("```json"):
-                logger.info(f"Stripping ```json")
+                # logger.info(f"Stripping ```json")
                 toc_update = json.loads(toc_update[8:-3])
             else:
-                logger.info(f"Don't strip ```json")
+                # logger.info(f"Don't strip ```json")
                 toc_update = json.loads(toc_update)
-
-            logger.info(f"{toc_update.keys()}")
 
             # Loop through the TOC and update the appropriate portions of the table_of_contents
             for item in toc_update["meta_data"]["items"]:
+                # Covert the page_refs to an int
+                item['page_ref'] = int(item['page_ref'])
+
                 # IF the TOC was encountered then calculate the number of pages to be gone through
-                if state["tables_of_contents_max_page"] < item["page_ref"]:
-                    state["tables_of_contents_max_page"] = item["page_ref"]
+                if tables_of_contents_max_page < item["page_ref"]:
+                    tables_of_contents_max_page = item["page_ref"]
 
                 if item["section"].lower().strip().startswith("table"):
                     state["table_of_contents"]["tables"].append(item)
-                elif item["section"].lower().strip().startswith("figures"):
-                    state["table_of_contents"]["tables"].append(item)
+                elif item["section"].lower().strip().startswith("figure"):
+                    state["table_of_contents"]["figures"].append(item)
                 else:
                     state["table_of_contents"]["sections"].append(item)
-            
+
         # Increment the current page
         current_page += 1
 
+    state["table_of_contents"]["scanned"] = True
+    state["max_sections"] = len(state["table_of_contents"]["sections"])
+    state["max_tables"] = len(state["table_of_contents"]["tables"])
 
-
-    state["pages_read"] = current_page
-    # HACK: Forces an exit from the function
-    state["pages_read"] += len(state["pages"])
-    logger.info(f" ============================= End of Read Table of Contents (page {state['pages_read']}) =============================")
+    logger.info(f" ============================= End of Read Table of Contents =============================")
     return state
 
 
@@ -208,8 +204,8 @@ def read_table(state: PdfParseState) -> PdfParseState:
     Returns:
         PdfParseState: The updated graph state.
     """
-    logger.info(f" ============================= Read Table (page {state['pages_read']}) =============================")
-    state["pages_read"] += 1
+    logger.info(f" ============================= Read Table =============================")
+    state["scanned_tables"] = state["max_tables"]
     return state
 
 
@@ -220,8 +216,58 @@ def read_section(state: PdfParseState) -> PdfParseState:
     Returns:
         PdfParseState: The updated graph state.
     """
-    logger.info(f" ============================= Read Section (page {state['pages_read']}) =============================")
-    state["pages_read"] += 1
+    logger.info(f" ============================= Read Section =============================")
+    # Start at the most recent page, loop through pages until we run out of table of contents
+    current_section = 0
+    statement = _agents_statements_["pdf_sections"]
+    messages = [
+        SystemMessage(content=statement),
+        HumanMessage(content="")
+    ]
+
+    bulk_sections = []
+    currnet_section = None
+
+    while state["scanned_sections"] < state["max_sections"]:
+        # Pull up the next section
+        currnet_section = state["table_of_contents"]["sections"][state["scanned_sections"]]
+
+        # If the bulk_sections, is empty go ahead and append it to the previous bulk section
+        if len(bulk_sections) == 0:
+            bulk_sections.append(currnet_section)
+        # Go through the other sections and try and see if the new section should be added,
+        # if no then go ahead and submit the previous bulk section for transcription.
+        else:
+            # HACK: Initial draft, just check if were in a whole new top-lvl section
+            pl = bulk_sections[0]["section"].split(".")[0]
+            cl = currnet_section["section"].split(".")[0]
+
+            if pl != cl:
+                # messages[1] = HumanMessage(content=page.extract_text())
+                # response = _llm_.invoke(messages)
+                pass
+            else:
+                # bulk_sections.append(currnet_section)
+                pass
+
+        # Increment by one and roll over to the next section
+        state["scanned_sections"] += 1
+
+
+    # HACK: ensure we exit out of our function
+    state["scanned_sections"] = state["max_sections"]
+    logger.info(f" ============================= End of Read Section =============================")
+    return state
+
+
+def read_figure(state: PdfParseState) -> PdfParseState:
+    """
+    Args:
+        state (PdfParseState): The current graph state.
+    Returns:
+        PdfParseState: The updated graph state.
+    """
+    logger.info(f" ============================= Read Figure =============================")
     return state
 
 
