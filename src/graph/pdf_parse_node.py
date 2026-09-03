@@ -238,10 +238,10 @@ def read_section(state: PdfParseState) -> PdfParseState:
         # Go through the other sections and try and see if the new section should be added,
         # if no then go ahead and submit the previous bulk section for transcription.
         else:
-            # HACK: Initial draft, just check if were in a whole new top-lvl section
             pl = bulk_sections[0]["section"].split(".")[0]
             cl = currnet_section["section"].split(".")[0]
 
+            # HACK: Initial draft, just check if were in a whole new top-lvl section
             if pl != cl:
                 # messages[1] = HumanMessage(content=page.extract_text())
                 # response = _llm_.invoke(messages)
