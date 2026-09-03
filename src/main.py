@@ -72,11 +72,27 @@ if __name__ == "__main__":
         # Compile and run the workflow
         app = workflow.compile()
 
+        # Prepare initial state: either from JSON file (if provided and exists) or empty
+        initial_state: PdfParseState
+        if args.state and os.path.exists(args.state):
+            try:
+                with open(args.state, "r", encoding="utf-8") as f:
+                    loaded_state = json.load(f)
+                # Ensure the file_path matches the current PDF path
+                loaded_state["file_path"] = args.path
+                initial_state = loaded_state  # type: ignore[assignment]
+                logger.info(f"Loaded initial state from {args.state}")
+            except Exception as e:
+                logger.error(f"Failed to load state from {args.state}: {e}")
+                initial_state = {"file_path": args.path}  # type: ignore[assignment]
+        else:
+            initial_state = {"file_path": args.path}  # type: ignore[assignment]
+
         # Print the ascii representation of the graph
         # print(app.get_graph().draw_ascii())  # Graph currently throwing an error (doesn't seem to like loops)
 
         # Run the graph and log the final output
-        output = app.invoke({})
+        output = app.invoke(initial_state)
         print(f"=> Final output: ")
         for k in output.keys():
             if k != "pages": 

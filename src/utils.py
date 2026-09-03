@@ -52,8 +52,9 @@ def load_arguments():
     """
     parser = argparse.ArgumentParser(description="Process PDF by block headers (e.g., 3.6.14).")
     parser.add_argument("path", help="Path to the PDF file")
-    parser.add_argument("-s", "--start_page", type=int, default=0, help="Start page number (0-indexed)")
-    parser.add_argument("-n", "--pages", type=int, default=100, help="Number of pages")
+    parser.add_argument("--state", type=str, default=None, help="Optional path to existing JSON file containing a PdfParseState object")
+    # parser.add_argument("-s", "--start_page", type=int, default=0, help="Start page number (0-indexed)")
+    # parser.add_argument("-n", "--pages", type=int, default=100, help="Number of pages")
     parser.add_argument("-l", "--log", action="store_true", help="Enable logging to a file")
     parser.add_argument("-lf", "--log_file", type=str, default="example.log", help="Log file name (default: example.log)")
     parser.add_argument("-lv", "--log_level", type=str, default="INFO", help="Log level (default: INFO)")

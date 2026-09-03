@@ -45,6 +45,42 @@ def _initialze_(llm, reader, statement_folder_path="./agents"):
                 logger.error(f"Stack trace is: \n {e}")
 
 
+def _read_sections_(sections, pages, page_offset = 0) -> list:
+    """
+    Reads in a section of the PDF document.
+    Returns:
+        list: A list of sections read from the PDF.
+    """
+    statement = _agents_statements_["pdf_sections"]
+    messages = [
+        SystemMessage(content=statement),
+        HumanMessage(content="")
+    ]
+
+    text = ""
+    prev_page = -1
+    for section in sections:
+        if prev_page != section["page_ref"]:
+            logger.info(f"Reading section {section['section']} from page unoffset {section['page_ref']} vs offset {section['page_ref'] + page_offset}")
+            prev_page = section["page_ref"]
+            page = pages[section["page_ref"] + page_offset]
+            text += page.extract_text() + "\n"
+
+    # messages[1] = HumanMessage(content=page.extract_text())
+    messages[1] = HumanMessage(content=text)
+    response = _llm_.invoke(messages)
+
+    # Store our results in the state, and reset our bulk_sections
+    logger.info(f"Section results: {response.content[:100]}...")
+    content = response.content
+    if content.startswith("```json"):
+        content = json.loads(content[8:-3])
+    else:
+        content = json.loads(content)
+
+    return content
+
+
 # ---------------------------------------------------------------------------------------
 # Routing logic
 # ---------------------------------------------------------------------------------------
@@ -155,7 +191,7 @@ def read_table_of_contents(state: PdfParseState) -> PdfParseState:
             if toc_encountered:
                 if not toc_first:
                     toc_first = True
-                    state["table_of_contents"]["table_of_contents_offset"] = current_page
+                    state["table_of_contents"]["table_of_contents_offset"] = current_page - 1 # Store the offset of the table of contents, so we can adjust our page numbers later on.
                     logger.info(f" ============================= Estimated offset of page numbers: {current_page} =============================")
 
                 toc_encountered = False
@@ -216,17 +252,11 @@ def read_section(state: PdfParseState) -> PdfParseState:
     Returns:
         PdfParseState: The updated graph state.
     """
-    logger.info(f" ============================= Read Section =============================")
-    # Start at the most recent page, loop through pages until we run out of table of contents
-    current_section = 0
-    statement = _agents_statements_["pdf_sections"]
-    messages = [
-        SystemMessage(content=statement),
-        HumanMessage(content="")
-    ]
-
+    logger.info(f" ============================= Read Sections Section =============================")
     bulk_sections = []
     currnet_section = None
+
+    page_offset = state["table_of_contents"]["table_of_contents_offset"]
 
     while state["scanned_sections"] < state["max_sections"]:
         # Pull up the next section
@@ -243,20 +273,28 @@ def read_section(state: PdfParseState) -> PdfParseState:
 
             # HACK: Initial draft, just check if were in a whole new top-lvl section
             if pl != cl:
-                # messages[1] = HumanMessage(content=page.extract_text())
-                # response = _llm_.invoke(messages)
-                pass
+                # Store our results in the state, and reset our bulk_sections
+                section = _read_sections_(bulk_sections, state["pages"], page_offset)
+                state["sections"][pl] = section
+                bulk_sections = []
+                logger.info(f"Section ({pl}) results: {section[:100]}...")
             else:
-                # bulk_sections.append(currnet_section)
-                pass
+                bulk_sections.append(currnet_section)
 
         # Increment by one and roll over to the next section
         state["scanned_sections"] += 1
 
+    if len(bulk_sections) > 0:
+        # Store our results in the state, and reset our bulk_sections
+        pl = bulk_sections[0]["section"].split(".")[0]
+        section = _read_sections_(bulk_sections, state["pages"], page_offset)
+        state["sections"][pl] = section
+        logger.info(f"Final Section ({pl}) results: {section[:100]}...")
+
 
     # HACK: ensure we exit out of our function
-    state["scanned_sections"] = state["max_sections"]
-    logger.info(f" ============================= End of Read Section =============================")
+    # state["scanned_sections"] = state["max_sections"]
+    logger.info(f" ============================= End of Read Sections Section =============================")
     return state
 
 
@@ -279,5 +317,28 @@ def summary_section(state: PdfParseState) -> PdfParseState:
         PdfParseState: The updated graph state.
     """
     logger.info(f" ============================= Summary Section =============================")
+    # Determine output path
+    file_path = state.get("file_path")
+
+    if file_path:
+        output_path = Path(file_path).with_suffix(".json")
+        logger.info(f"Saving state to JSON at: {output_path}")
+    else:
+        # Fallback: save next to working directory with a generic name
+        # output_path = Path("state_summary.json")
+        output_path = input("Please provide a file path to save the state summary (e.g., 'state_summary.json'), or skip: ").strip()
+        output_path = None if not output_path or output_path.lower() == "skip" else Path(output_path)
+
+    if output_path:
+        try:
+            with open(output_path, "w", encoding="utf-8") as f:
+                object_to_serialize = {k: v for k, v in state.items() if k != "pages"}  # Exclude 'pages' from serialization
+                json.dump(object_to_serialize, f, ensure_ascii=False, indent=2)
+            logger.info("State successfully written to JSON.")
+        except Exception as e:
+            logger.error(f"Failed to write state JSON to {output_path}: {e}")
+    else:
+        logger.info("No output path provided. State summary not saved.")
+
     return state
 
