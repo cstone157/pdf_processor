@@ -78,15 +78,15 @@ if __name__ == "__main__":
             try:
                 with open(args.state, "r", encoding="utf-8") as f:
                     loaded_state = json.load(f)
-                # Ensure the file_path matches the current PDF path
-                loaded_state["file_path"] = args.path
+                # Ensure the state_export_path matches the current state file path
+                loaded_state["state_export_path"] = args.state
                 initial_state = loaded_state  # type: ignore[assignment]
                 logger.info(f"Loaded initial state from {args.state}")
             except Exception as e:
                 logger.error(f"Failed to load state from {args.state}: {e}")
-                initial_state = {"file_path": args.path}  # type: ignore[assignment]
+                initial_state = {}
         else:
-            initial_state = {"file_path": args.path}  # type: ignore[assignment]
+            initial_state = {}
 
         # Print the ascii representation of the graph
         # print(app.get_graph().draw_ascii())  # Graph currently throwing an error (doesn't seem to like loops)

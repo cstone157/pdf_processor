@@ -11,7 +11,7 @@ class PdfParseState(TypedDict):
     appendix: the list of the different appendix's that have been read in
     tables_of_contents: the dictionary of the table of contents
   """
-  file_path: str
+  state_export_path: str
   pages: list
   table_of_contents: dict
   sections: dict

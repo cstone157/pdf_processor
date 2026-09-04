@@ -45,7 +45,7 @@ def _initialze_(llm, reader, statement_folder_path="./agents"):
                 logger.error(f"Stack trace is: \n {e}")
 
 
-def _read_sections_(sections, pages, page_offset = 0) -> list:
+def _read_sections_(sections, pages, page_offset = 0, next_section=None, to_end=False) -> list:
     """
     Reads in a section of the PDF document.
     Returns:
@@ -57,13 +57,37 @@ def _read_sections_(sections, pages, page_offset = 0) -> list:
         HumanMessage(content="")
     ]
 
-    text = ""
-    prev_page = -1
-    for section in sections:
+
+    prev_page = sections[0]["page_ref"]
+    logger.info(f"Reading initial section {sections[0]['section']} from page unoffset {prev_page} vs offset {prev_page + page_offset}")
+    page = pages[prev_page + page_offset]
+    text = page.extract_text() + "\n"
+
+    # Loop throught the sections and read in the text from the pages, if we 
+    # encounter a new page then we need to read in all of the pages in between.
+    for section in sections[1:]:
         if prev_page != section["page_ref"]:
-            logger.info(f"Reading section {section['section']} from page unoffset {section['page_ref']} vs offset {section['page_ref'] + page_offset}")
-            prev_page = section["page_ref"]
-            page = pages[section["page_ref"] + page_offset]
+            while prev_page < section["page_ref"]:
+                prev_page += 1
+                logger.info(f"Reading section {section['section']} from page unoffset {prev_page} vs offset {prev_page + page_offset}")
+                page = pages[prev_page + page_offset]
+                text += page.extract_text() + "\n"
+
+    # Check and see if there is a next section, if so then we need to read 
+    # in all of the pages until we reach the next section.
+    if next_section is not None:
+        while prev_page + 1 < next_section["page_ref"]:
+            prev_page += 1
+            logger.info(f"Reading next_section {next_section['section']} from page unoffset {prev_page} vs offset {prev_page + page_offset}")
+            page = pages[prev_page + page_offset]
+            text += page.extract_text() + "\n"
+    # Check and see if we need to read until the end of the document, if so then we need to read
+    # in all of the pages until we reach the end of the document.
+    elif to_end:
+        while prev_page + page_offset < len(pages) - 1:
+            prev_page += 1
+            logger.info(f"Reading trailing sections from page unoffset {prev_page} vs offset {prev_page + page_offset}")
+            page = pages[prev_page + page_offset]
             text += page.extract_text() + "\n"
 
     # messages[1] = HumanMessage(content=page.extract_text())
@@ -274,7 +298,7 @@ def read_section(state: PdfParseState) -> PdfParseState:
             # HACK: Initial draft, just check if were in a whole new top-lvl section
             if pl != cl:
                 # Store our results in the state, and reset our bulk_sections
-                section = _read_sections_(bulk_sections, state["pages"], page_offset)
+                section = _read_sections_(bulk_sections, state["pages"], page_offset, next_section=currnet_section)
                 state["sections"][pl] = section
                 bulk_sections = []
                 logger.info(f"Section ({pl}) results: {section[:100]}...")
@@ -287,7 +311,7 @@ def read_section(state: PdfParseState) -> PdfParseState:
     if len(bulk_sections) > 0:
         # Store our results in the state, and reset our bulk_sections
         pl = bulk_sections[0]["section"].split(".")[0]
-        section = _read_sections_(bulk_sections, state["pages"], page_offset)
+        section = _read_sections_(bulk_sections, state["pages"], page_offset, to_end=True)
         state["sections"][pl] = section
         logger.info(f"Final Section ({pl}) results: {section[:100]}...")
 
@@ -318,25 +342,25 @@ def summary_section(state: PdfParseState) -> PdfParseState:
     """
     logger.info(f" ============================= Summary Section =============================")
     # Determine output path
-    file_path = state.get("file_path")
+    state_export_path = state.get("state_export_path")
 
-    if file_path:
-        output_path = Path(file_path).with_suffix(".json")
-        logger.info(f"Saving state to JSON at: {output_path}")
+    if state_export_path:
+        state_export_path = Path(state_export_path).with_suffix(".json")
+        logger.info(f"Saving state to JSON at: {state_export_path}")
     else:
         # Fallback: save next to working directory with a generic name
         # output_path = Path("state_summary.json")
-        output_path = input("Please provide a file path to save the state summary (e.g., 'state_summary.json'), or skip: ").strip()
-        output_path = None if not output_path or output_path.lower() == "skip" else Path(output_path)
+        state_export_path = input("Please provide a file path to save the state summary (e.g., 'state_summary.json'), or skip: ").strip()
+        state_export_path = None if not state_export_path or state_export_path.lower() == "skip" else Path(state_export_path)
 
-    if output_path:
+    if state_export_path:
         try:
-            with open(output_path, "w", encoding="utf-8") as f:
+            with open(state_export_path, "w", encoding="utf-8") as f:
                 object_to_serialize = {k: v for k, v in state.items() if k != "pages"}  # Exclude 'pages' from serialization
                 json.dump(object_to_serialize, f, ensure_ascii=False, indent=2)
             logger.info("State successfully written to JSON.")
         except Exception as e:
-            logger.error(f"Failed to write state JSON to {output_path}: {e}")
+            logger.error(f"Failed to write state JSON to {state_export_path}: {e}")
     else:
         logger.info("No output path provided. State summary not saved.")
 
