@@ -9,13 +9,11 @@ Process the provided PDF text into a JSON array of objects. Each object represen
 ## Output Format
 Return **only** a valid JSON array. Do not include markdown code blocks or conversational text.
 ```json
-[
-  {
-    "text": "...",
-    "keywords": ["...", "..."],
-    "sections": ["section id", "..."]
-  }
-]
+{
+  "text": "...",
+  "keywords": ["...", "..."],
+  "sections": ["section id", "..."]
+}
 ```
 
 ## Transformation Rules

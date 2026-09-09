@@ -14,10 +14,10 @@ class PdfParseState(TypedDict):
   state_export_path: str
   pages: list
   table_of_contents: dict
-  sections: dict
+  sections: list
   max_sections: int
   scanned_sections: int
-  tables: dict
+  tables: list
   max_tables: int
   scanned_tables: int
   

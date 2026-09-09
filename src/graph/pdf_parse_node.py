@@ -1,5 +1,6 @@
-import logging
 import json
+import logging
+# import re
 from pathlib import Path
 from pdfplumber import PDF
 
@@ -43,66 +44,6 @@ def _initialze_(llm, reader, statement_folder_path="./agents"):
             except Exception as e:
                 logger.error(f"Error while trying to ready in {file_path}")
                 logger.error(f"Stack trace is: \n {e}")
-
-
-def _read_sections_(sections, pages, page_offset = 0, next_section=None, to_end=False) -> list:
-    """
-    Reads in a section of the PDF document.
-    Returns:
-        list: A list of sections read from the PDF.
-    """
-    statement = _agents_statements_["pdf_sections"]
-    messages = [
-        SystemMessage(content=statement),
-        HumanMessage(content="")
-    ]
-
-
-    prev_page = sections[0]["page_ref"]
-    logger.info(f"Reading initial section {sections[0]['section']} from page unoffset {prev_page} vs offset {prev_page + page_offset}")
-    page = pages[prev_page + page_offset]
-    text = page.extract_text() + "\n"
-
-    # Loop throught the sections and read in the text from the pages, if we 
-    # encounter a new page then we need to read in all of the pages in between.
-    for section in sections[1:]:
-        if prev_page != section["page_ref"]:
-            while prev_page < section["page_ref"]:
-                prev_page += 1
-                logger.info(f"Reading section {section['section']} from page unoffset {prev_page} vs offset {prev_page + page_offset}")
-                page = pages[prev_page + page_offset]
-                text += page.extract_text() + "\n"
-
-    # Check and see if there is a next section, if so then we need to read 
-    # in all of the pages until we reach the next section.
-    if next_section is not None:
-        while prev_page + 1 < next_section["page_ref"]:
-            prev_page += 1
-            logger.info(f"Reading next_section {next_section['section']} from page unoffset {prev_page} vs offset {prev_page + page_offset}")
-            page = pages[prev_page + page_offset]
-            text += page.extract_text() + "\n"
-    # Check and see if we need to read until the end of the document, if so then we need to read
-    # in all of the pages until we reach the end of the document.
-    elif to_end:
-        while prev_page + page_offset < len(pages) - 1:
-            prev_page += 1
-            logger.info(f"Reading trailing sections from page unoffset {prev_page} vs offset {prev_page + page_offset}")
-            page = pages[prev_page + page_offset]
-            text += page.extract_text() + "\n"
-
-    # messages[1] = HumanMessage(content=page.extract_text())
-    messages[1] = HumanMessage(content=text)
-    response = _llm_.invoke(messages)
-
-    # Store our results in the state, and reset our bulk_sections
-    logger.info(f"Section results: {response.content[:100]}...")
-    content = response.content
-    if content.startswith("```json"):
-        content = json.loads(content[8:-3])
-    else:
-        content = json.loads(content)
-
-    return content
 
 
 # ---------------------------------------------------------------------------------------
@@ -159,11 +100,11 @@ def read_initial_document(state: PdfParseState) -> PdfParseState:
         }
 
     if "sections" not in state:
-        state["sections"] = {}
+        state["sections"] = []
         state["max_sections"] = 0
         state["scanned_sections"] = 0
     if "tables" not in state:
-        state["tables"] = {}
+        state["tables"] = []
         state["max_tables"] = 0
         state["scanned_tables"] = 0
     return state
@@ -277,43 +218,48 @@ def read_section(state: PdfParseState) -> PdfParseState:
         PdfParseState: The updated graph state.
     """
     logger.info(f" ============================= Read Sections Section =============================")
-    bulk_sections = []
     currnet_section = None
+    statement = _agents_statements_["pdf_sections"]
+    messages = [
+        SystemMessage(content=statement),
+        HumanMessage(content="")
+    ]
 
     page_offset = state["table_of_contents"]["table_of_contents_offset"]
 
     while state["scanned_sections"] < state["max_sections"]:
         # Pull up the next section
         currnet_section = state["table_of_contents"]["sections"][state["scanned_sections"]]
+        next_section = state["table_of_contents"]["sections"][state["scanned_sections"] + 1] if state["scanned_sections"] + 1 < state["max_sections"] else None
 
-        # If the bulk_sections, is empty go ahead and append it to the previous bulk section
-        if len(bulk_sections) == 0:
-            bulk_sections.append(currnet_section)
-        # Go through the other sections and try and see if the new section should be added,
-        # if no then go ahead and submit the previous bulk section for transcription.
+        # If our "section" is only a single digit, then we should skip it, as it is likely a page number or something else that isn't a section.
+        if len(currnet_section["section"].strip()) <= 1:
+            logger.info(f"Skipping section '{currnet_section['section']} {currnet_section['title']}' as it is likely a page number or something else that isn't a section.")
+            state["scanned_sections"] += 1
+            continue
+
+        text = ""
+        # If the next section is None, then read all of the text until the end of the document, otherwise read until the next section is encountered.
+        if next_section is None:
+            for page in state["pages"][currnet_section["page_ref"] + page_offset:]:
+                text += page.extract_text()
         else:
-            pl = bulk_sections[0]["section"].split(".")[0]
-            cl = currnet_section["section"].split(".")[0]
+            for page in state["pages"][currnet_section["page_ref"] + page_offset:next_section["page_ref"] + page_offset]:
+                text += page.extract_text()
 
-            # HACK: Initial draft, just check if were in a whole new top-lvl section
-            if pl != cl:
-                # Store our results in the state, and reset our bulk_sections
-                section = _read_sections_(bulk_sections, state["pages"], page_offset, next_section=currnet_section)
-                state["sections"][pl] = section
-                bulk_sections = []
-                logger.info(f"Section ({pl}) results: {section[:100]}...")
-            else:
-                bulk_sections.append(currnet_section)
+        # Use the LLM to parse the section text and extract relevant information
+        logger.info(f"Processing section {currnet_section['section']} {currnet_section['title']}")
+        messages[0] = SystemMessage(content=statement + f"\n- Extract only the relevant information for section '{currnet_section['section']} {currnet_section['title']}'")
+        messages[1] = HumanMessage(content=text)
+
+        response = _llm_.invoke(messages)
+        section_update = response.content
+        if section_update.startswith("```json"):
+            section_update = json.loads(section_update[8:-3])
 
         # Increment by one and roll over to the next section
+        state["sections"].append(section_update)
         state["scanned_sections"] += 1
-
-    if len(bulk_sections) > 0:
-        # Store our results in the state, and reset our bulk_sections
-        pl = bulk_sections[0]["section"].split(".")[0]
-        section = _read_sections_(bulk_sections, state["pages"], page_offset, to_end=True)
-        state["sections"][pl] = section
-        logger.info(f"Final Section ({pl}) results: {section[:100]}...")
 
 
     # HACK: ensure we exit out of our function
