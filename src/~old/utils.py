@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 
-def load_system_prompts(agents_folder="./agents") -> dict:
+def load_system_prompts(agents_folder: str) -> dict:
     """
     Loads the agent behavior definition from a markdown file.
     """

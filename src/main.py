@@ -4,14 +4,19 @@ import json
 import logging
 
 import pdfplumber
+from typing import TypedDict
 
 from langgraph.graph import StateGraph, START, END
 from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from utils import load_system_prompts, load_environment, load_arguments
-from graph.pdf_parse_state import PdfParseState
-import graph.pdf_parse_node
+
+
+class PdfParseState(TypedDict):
+    """
+    """
+    text: str
 
 
 logger = logging.getLogger(__name__)
@@ -38,64 +43,28 @@ if __name__ == "__main__":
             api_version=os.getenv("OPENAI_API_VERSION"),
             temperature=0.7
         )
-        graph.pdf_parse_node._initialze_(llm, reader)
 
+        # Retrieve our system prompts from the prompts directory
+        statement_dict = load_system_prompts()
+        statement = statement_dict.get("page_scan")
 
-        # Build graph
-        body_nodes = [
-            'read_initial_document', 'read_table_of_contents', 'read_table', 'read_section'#, 'read_figure'
+        messages = [
+            SystemMessage(content=statement),
+            HumanMessage(content="")
         ]
-        workflow = StateGraph(PdfParseState)           
-        workflow.add_node('read_initial_document', graph.pdf_parse_node.read_initial_document)
-        workflow.add_node('read_table_of_contents', graph.pdf_parse_node.read_table_of_contents)
-        workflow.add_node('read_table', graph.pdf_parse_node.read_table)
-        workflow.add_node('read_section', graph.pdf_parse_node.read_section)
-        # workflow.add_node('read_figure', graph.pdf_parse_node.read_figure)
-        workflow.add_node('summary_section', graph.pdf_parse_node.summary_section)
 
-        # Define the flow
-        workflow.add_edge(START, 'read_initial_document')
-        for n in body_nodes:
-            workflow.add_conditional_edges(n, 
-                graph.pdf_parse_node.routing_logic,
-                {
-                    "read_table_of_contents": "read_table_of_contents",
-                    "read_table": "read_table",
-                    "read_section": "read_section",
-                    # "read_figure": "read_figure",
-                    "summary_section": "summary_section"
-                }
-            )
-        
-        workflow.add_edge('summary_section', END)
 
-        # Compile and run the workflow
-        app = workflow.compile()
+        logger.info(f"Processing file: {args.path}")
 
-        # Prepare initial state: either from JSON file (if provided and exists) or empty
-        initial_state: PdfParseState
-        if args.state and os.path.exists(args.state):
-            try:
-                with open(args.state, "r", encoding="utf-8") as f:
-                    loaded_state = json.load(f)
-                # Ensure the state_export_path matches the current state file path
-                loaded_state["state_export_path"] = args.state
-                initial_state = loaded_state  # type: ignore[assignment]
-                logger.info(f"Loaded initial state from {args.state}")
-            except Exception as e:
-                logger.error(f"Failed to load state from {args.state}: {e}")
-                initial_state = {}
-        else:
-            initial_state = {}
+        for i in range(10, 20):  # Process pages 10 to 19
+            logger.info(f"Processing page {i + 1} of {len(reader.pages)}")
 
-        # Print the ascii representation of the graph
-        # print(app.get_graph().draw_ascii())  # Graph currently throwing an error (doesn't seem to like loops)
+            # Invoke the LLM to process the current page
+            page = reader.pages[i]
+            messages[1] = HumanMessage(content=page.extract_text())
+            response = llm.invoke(messages)
 
-        # Run the graph and log the final output
-        output = app.invoke(initial_state)
-        print(f"=> Final output: ")
-        for k in output.keys():
-            if k != "pages": 
-                print(f"-----> {k} : {json.dumps(output[k], indent=2)}")
+            logger.info(f"LLM response for page {i + 1}: \n{response}\n\n")
+
     else:
         logger.error(f"File {args.path} does not exist.")

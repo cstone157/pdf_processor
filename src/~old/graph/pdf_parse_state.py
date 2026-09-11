@@ -1,5 +1,4 @@
 from typing import TypedDict
-from pdfplumber import PDF
 
 # Define the structure of our state
 class PdfParseState(TypedDict):

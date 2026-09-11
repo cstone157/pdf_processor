@@ -256,10 +256,17 @@ def read_section(state: PdfParseState) -> PdfParseState:
         section_update = response.content
         if section_update.startswith("```json"):
             section_update = json.loads(section_update[8:-3])
+        else:
+            section_update = json.loads(section_update)
 
-        # Increment by one and roll over to the next section
-        state["sections"].append(section_update)
-        state["scanned_sections"] += 1
+        # if the section_update is a list, then we should append each item in the list to the sections list, otherwise we should append the single item to the sections list.
+        if isinstance(section_update, list):
+            state["sections"].extend(section_update)
+            state["scanned_sections"] += len(section_update)
+        else:
+            # Increment by one and roll over to the next section
+            state["sections"].append(section_update)
+            state["scanned_sections"] += 1
 
 
     # HACK: ensure we exit out of our function
